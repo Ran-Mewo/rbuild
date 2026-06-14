@@ -1,10 +1,15 @@
 name: release
 
-# Build release archives and attach them when a version tag is pushed.
+# Build release archives and attach them to a release. Triggered by pushing a
+# version tag, or manually (provide the tag to create/update).
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
 
 permissions:
   contents: write
@@ -98,4 +103,7 @@ jobs:
       - name: Attach archives to the release
         uses: softprops/action-gh-release@v2
         with:
+          # On a tag push the tag is inferred from the ref; on manual dispatch
+          # it comes from the input.
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: dist/*
