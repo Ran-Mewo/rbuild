@@ -195,7 +195,9 @@ fn launch_script(docker: &str, workspace_id: &str) -> String {
 /// toward "not newer" so we never push an older or sideways build.
 fn is_newer(a: &str, b: &str) -> bool {
     fn parts(v: &str) -> [u64; 3] {
-        // Take the leading "x.y.z", ignoring any pre-release/build suffix.
+        // Tolerate a leading "v"/"V" (as on git tags), then take the leading
+        // "x.y.z", ignoring any pre-release/build suffix.
+        let v = v.trim().trim_start_matches(['v', 'V']);
         let core = v.split(['-', '+']).next().unwrap_or(v);
         let mut out = [0u64; 3];
         for (i, p) in core.split('.').take(3).enumerate() {
@@ -240,6 +242,10 @@ mod tests {
         assert!(!is_newer("0.9.9", "1.0.0"));
         // Suffixes are ignored for ordering of the numeric core.
         assert!(!is_newer("0.1.0-rc1", "0.1.0"));
+        // A leading "v" (git-tag style) and short forms are tolerated.
+        assert!(is_newer("v1.1", "v1.0"));
+        assert!(is_newer("v0.2.0", "0.1.0"));
+        assert!(!is_newer("v1.0", "v1.0"));
     }
 }
 

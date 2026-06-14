@@ -21,6 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Stamp version from tag
+        shell: bash
+        run: .github/stamp-version.sh "${{ inputs.tag || github.ref_name }}"
       - name: Build static musl daemon
         run: |
           docker run --rm -v "$PWD":/src -w /src rust:alpine sh -ec '
@@ -51,6 +54,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Stamp version from tag
+        shell: bash
+        run: .github/stamp-version.sh "${{ inputs.tag || github.ref_name }}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
