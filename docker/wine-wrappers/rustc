@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Run the Windows rustc under Wine.
+. /usr/local/bin/_common.sh
+exe="$(find_win_exe rustc.exe)"
+[ -n "$exe" ] || { echo "rbuild-wine: rustc.exe not found in $WINEPREFIX" >&2; exit 1; }
+exec wine "$exe" "$@"

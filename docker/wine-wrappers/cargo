@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Run the Windows cargo (installed into the Wine prefix by rustup) under Wine,
+# producing real Windows artifacts via the MSVC toolchain on PATH.
+. /usr/local/bin/_common.sh
+cargo_exe="$(find_win_exe cargo.exe)"
+[ -n "$cargo_exe" ] || { echo "rbuild-wine: cargo.exe not found in $WINEPREFIX" >&2; exit 1; }
+exec wine "$cargo_exe" "$@"

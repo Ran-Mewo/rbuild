@@ -1,0 +1,105 @@
+name: release
+
+# Build release archives and attach them when a version tag is pushed.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # The daemon always runs on the Linux remote, so it's the same static musl
+  # binary for every client archive. Build it once and share it.
+  daemon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build static musl daemon
+        run: |
+          docker run --rm -v "$PWD":/src -w /src rust:alpine sh -ec '
+            apk add --no-cache musl-dev >/dev/null
+            cargo build --release -p rbuildd \
+              --target x86_64-unknown-linux-musl \
+              --target-dir /src/target
+          '
+          mkdir -p dist && cp target/x86_64-unknown-linux-musl/release/rbuildd dist/rbuildd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rbuildd
+          path: dist/rbuildd
+
+  client:
+    needs: daemon
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install cross linker (aarch64 linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+      - name: Build client
+        run: cargo build --release -p rbuild --target ${{ matrix.target }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: rbuildd
+          path: daemon-bin
+      - name: Package archive
+        shell: bash
+        run: |
+          staging="rbuild-${{ matrix.target }}"
+          mkdir -p "$staging/daemon"
+          # The daemon is always the static linux binary (the remote is Linux).
+          cp daemon-bin/rbuildd "$staging/daemon/rbuildd"
+          chmod +x "$staging/daemon/rbuildd"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/rbuild.exe" "$staging/rbuild.exe"
+            # Zip contents at the archive root (rbuild.exe, daemon/rbuildd).
+            (cd "$staging" && 7z a "../$staging.zip" .)
+          else
+            cp "target/${{ matrix.target }}/release/rbuild" "$staging/rbuild"
+            chmod +x "$staging/rbuild"
+            # Tar contents at the archive root so install.sh finds ./rbuild
+            # and ./daemon/rbuildd directly.
+            tar -czf "$staging.tar.gz" -C "$staging" .
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: |
+            rbuild-*.tar.gz
+            rbuild-*.zip
+
+  release:
+    needs: client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          merge-multiple: true
+          path: dist
+      - name: Attach archives to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
