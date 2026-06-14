@@ -24,4 +24,3 @@ tracing-subscriber.workspace = true
 clap.workspace = true
 hex.workspace = true
 async-trait = "0.1"
-globset = "0.4"

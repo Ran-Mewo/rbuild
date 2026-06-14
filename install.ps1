@@ -42,11 +42,28 @@ try {
 
     Say "installing to $InstallDir"
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+
+    # If the live-sync agent is running (this is an update), stop its scheduled
+    # task and any process so the running rbuild.exe can be overwritten.
+    $hadAgent = $false
+    if (Get-ScheduledTask -TaskName 'rbuild-agent' -ErrorAction SilentlyContinue) {
+        $hadAgent = $true
+        schtasks /End /TN rbuild-agent 2>$null | Out-Null
+        Get-Process rbuild -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+    }
+
     # Expand into the install dir; archive root holds rbuild.exe and daemon\.
     Expand-Archive -Path $zip -DestinationPath $InstallDir -Force
 
     if (-not (Test-Path (Join-Path $InstallDir 'rbuild.exe'))) {
         throw "archive did not contain rbuild.exe"
+    }
+
+    # Restart the agent with the new binary if we stopped it for an update.
+    if ($hadAgent) {
+        schtasks /Run /TN rbuild-agent 2>$null | Out-Null
+        Say "restarted the live-sync agent"
     }
 
     # Add to the user PATH (persisted) if not already present.
@@ -59,7 +76,7 @@ try {
         Say "added $InstallDir to your user PATH (restart shells to pick it up)"
     }
 
-    Say "installed. Next: rbuild init <ssh-host>; rbuild add ~\Code; rbuild init-shell powershell"
+    Say "installed. Next: rbuild init <ssh-host>; rbuild add <code-dir>; rbuild init-shell powershell"
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

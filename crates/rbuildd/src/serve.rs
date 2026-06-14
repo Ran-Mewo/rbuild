@@ -187,7 +187,6 @@ async fn handle_control(
             stream: s,
             workspace,
             request,
-            artifact_globs,
             linux_image,
             wine_image,
         } => {
@@ -200,7 +199,6 @@ async fn handle_control(
                     s,
                     &workspace,
                     request,
-                    &artifact_globs,
                     &linux_image,
                     &wine_image,
                     &sink,

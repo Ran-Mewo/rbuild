@@ -12,11 +12,12 @@ use rbuild_proto::transport::{read_frame, write_frame, Frame};
 use std::io::Write;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::ancestor;
 use crate::connection::Connection;
 
 /// Dispatches a build to the remote and mirrors its result locally. The build
-/// runs in `rel_cwd` (relative to the code-root mirror); artifacts under that
-/// directory are synced back. Returns the remote process's exit code.
+/// runs in `rel_cwd` (relative to the code-root mirror); whatever it generates
+/// is synced back. Returns the remote process's exit code.
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch(
     conn: &mut Connection,
@@ -38,22 +39,32 @@ pub async fn dispatch(
         stream,
         workspace: workspace_id.to_string(),
         request,
-        artifact_globs: cfg.build.artifacts.clone(),
         linux_image: cfg.build.linux_image.clone(),
         wine_image: cfg.build.wine_image.clone(),
     };
     write_frame(&mut conn.stdin, &Frame::control(stream, &open)?).await?;
 
-    drive(stream, local_root, &mut conn.stdout, &mut conn.stdin).await
+    drive(stream, workspace_id, local_root, &mut conn.stdout, &mut conn.stdin).await
 }
 
 /// Reads build frames until BuildFinished, printing output and handling the
 /// artifact exchange.
-async fn drive<R, W>(stream: u32, root: &Path, reader: &mut R, writer: &mut W) -> Result<i32>
+async fn drive<R, W>(
+    stream: u32,
+    workspace_id: &str,
+    root: &Path,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<i32>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    // Build outputs the remote produced, by path → content hash. After the
+    // build we fold these into the ancestor snapshot so the next live-sync sees
+    // them as already-agreed (the remote produced them) rather than as local
+    // additions to push back up — no ping-pong, no reliance on ignore rules.
+    let mut produced: std::collections::BTreeMap<String, rbuild_proto::Hash> = Default::default();
     let mut incoming: Option<IncomingArtifact> = None;
     loop {
         let frame = read_frame(reader)
@@ -83,6 +94,11 @@ where
                 }
             },
             Message::ArtifactManifest { entries } => {
+                // Remember every produced file's hash for the ancestor update,
+                // and request the ones we don't already have locally.
+                for e in &entries {
+                    produced.insert(e.path.clone(), e.hash);
+                }
                 let need = artifacts_to_pull(root, &entries);
                 write_frame(writer, &Frame::control(stream, &Message::ArtifactNeed { files: need })?)
                     .await?;
@@ -90,7 +106,12 @@ where
             Message::FileHeader { path, len, mode, compressed } => {
                 incoming = Some(IncomingArtifact { path, len, mode, compressed });
             }
-            Message::BuildFinished { exit_code } => return Ok(exit_code),
+            Message::BuildFinished { exit_code } => {
+                // Fold the build's outputs into the ancestor so the next
+                // live-sync treats them as already in sync with the remote.
+                ancestor::record_build_outputs(workspace_id, &produced);
+                return Ok(exit_code);
+            }
             Message::Error { message } => anyhow::bail!("remote build error: {message}"),
             other => anyhow::bail!("unexpected build message: {other:?}"),
         }

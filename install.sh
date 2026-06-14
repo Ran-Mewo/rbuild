@@ -59,8 +59,16 @@ install -m 0755 "$tmp/rbuild" "$INSTALL_DIR/rbuild"
 install -m 0755 "$tmp/daemon/rbuildd" "$INSTALL_DIR/daemon/rbuildd"
 
 say "installed rbuild to $INSTALL_DIR/rbuild"
+
+# If the live-sync agent is already running (this is an update), restart it so
+# it picks up the new binary.
+if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet rbuild-agent 2>/dev/null; then
+    systemctl --user restart rbuild-agent >/dev/null 2>&1 || true
+    say "restarted the live-sync agent"
+fi
+
 case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;
     *) say "note: $INSTALL_DIR is not on your PATH — add it to use \`rbuild\` directly." ;;
 esac
-say "next: rbuild init <ssh-host> && rbuild add ~/Code && rbuild init-shell <shell>"
+say "next: rbuild init <ssh-host> && rbuild add <code-dir> && rbuild init-shell <shell>"

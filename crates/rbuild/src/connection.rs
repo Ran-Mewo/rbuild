@@ -27,7 +27,7 @@ pub struct Connection {
 
 impl Connection {
     /// Connects for a given workspace, ensuring Docker access is detected and
-    /// the daemon binary is present in its Docker volume first. This is the path
+    /// the daemon binary is present and up to date first. This is the path
     /// normal commands use.
     pub async fn connect_or_deploy(remote: &RemoteConfig, workspace_id: &str) -> Result<Self> {
         // Resolve how Docker is invoked on the remote (`docker` vs `sudo
@@ -44,7 +44,30 @@ impl Connection {
                 .await
                 .context("auto-deploying rbuildd")?;
         }
-        Self::connect(&remote, workspace_id).await
+
+        let conn = Self::connect(&remote, workspace_id).await?;
+
+        // Keep the remote daemon current: client and daemon ship from the same
+        // build, so if this client is *newer* than the daemon, the daemon's
+        // binary is stale. Re-push it, kill running daemon containers so they
+        // relaunch on the new binary (a brief reconnect is fine), then connect
+        // afresh. We only ever roll forward — never downgrade the server.
+        if is_newer(rbuild_proto::VERSION, &conn.daemon_version) {
+            tracing::info!(
+                remote = %conn.daemon_version,
+                client = rbuild_proto::VERSION,
+                "updating remote daemon to match client"
+            );
+            conn.shutdown().await?;
+            deploy::ensure_daemon(&remote)
+                .await
+                .context("updating rbuildd on the remote")?;
+            deploy::kill_daemons(&remote)
+                .await
+                .context("restarting remote daemons after update")?;
+            return Self::connect(&remote, workspace_id).await;
+        }
+        Ok(conn)
     }
 
     /// Launches the daemon container over SSH and completes the handshake.
@@ -153,6 +176,7 @@ fn launch_script(docker: &str, workspace_id: &str) -> String {
         "{docker} volume create --label {label} {ws} >/dev/null; \
          {docker} volume create --label {label} {cache} >/dev/null; \
          exec {docker} run --rm -i \
+             --label {label} --label rbuild.role=daemon \
              -v /var/run/docker.sock:/var/run/docker.sock \
              -v {bin}:/rbuild-bin \
              -v {ws}:/work \
@@ -162,6 +186,24 @@ fn launch_script(docker: &str, workspace_id: &str) -> String {
              -e RBUILD_CACHE_VOLUME={cache} \
              {img} /rbuild-bin/rbuildd serve"
     )
+}
+
+/// Whether semver `a` is strictly newer than `b`, comparing numeric
+/// major.minor.patch. Used to decide if this client should roll the remote
+/// daemon forward — we update only when strictly newer, never downgrading.
+/// Unparseable parts compare as 0, and a non-equal/un-orderable result errs
+/// toward "not newer" so we never push an older or sideways build.
+fn is_newer(a: &str, b: &str) -> bool {
+    fn parts(v: &str) -> [u64; 3] {
+        // Take the leading "x.y.z", ignoring any pre-release/build suffix.
+        let core = v.split(['-', '+']).next().unwrap_or(v);
+        let mut out = [0u64; 3];
+        for (i, p) in core.split('.').take(3).enumerate() {
+            out[i] = p.parse().unwrap_or(0);
+        }
+        out
+    }
+    parts(a) > parts(b)
 }
 
 /// Ensures `remote.docker` is populated, probing the remote and caching the
@@ -182,4 +224,23 @@ async fn ensure_docker_detected(remote: &RemoteConfig) -> Result<RemoteConfig> {
     }
     Ok(remote)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer;
+
+    #[test]
+    fn newer_only_rolls_forward() {
+        assert!(is_newer("0.2.0", "0.1.0"));
+        assert!(is_newer("0.1.1", "0.1.0"));
+        assert!(is_newer("1.0.0", "0.9.9"));
+        // Equal or older must never trigger an update (no downgrade, no churn).
+        assert!(!is_newer("0.1.0", "0.1.0"));
+        assert!(!is_newer("0.1.0", "0.2.0"));
+        assert!(!is_newer("0.9.9", "1.0.0"));
+        // Suffixes are ignored for ordering of the numeric core.
+        assert!(!is_newer("0.1.0-rc1", "0.1.0"));
+    }
+}
+
 

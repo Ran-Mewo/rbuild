@@ -4,7 +4,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use globset::{Glob, GlobSetBuilder};
 use rbuild_proto::proto::{BuildRequest, Message, OutputFd};
 use rbuild_proto::scan;
 use rbuild_proto::transport::Frame;
@@ -37,12 +36,10 @@ impl OutputSink for BuildSink {
 }
 
 /// Runs a build start to finish on the given stream.
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
     stream: u32,
     workspace_id: &str,
     req: BuildRequest,
-    artifact_globs: &[String],
     linux_image: &str,
     wine_image: &str,
     out: &FrameSink,
@@ -61,18 +58,24 @@ pub async fn run(
     let cache_volume = crate::serve::cache_volume()
         .context("RBUILD_CACHE_VOLUME not set — daemon must run with a cache volume")?;
 
+    // Snapshot the tree before the build so we can tell exactly what it
+    // generated — every new or changed file is sent back, no globs to declare.
+    let before = scan::scan_raw(&workspace)?;
+
     let backend = backend::for_target(req.target, linux_image, wine_image);
     let mut sink = BuildSink { stream, out: out.clone() };
     let exit_code = backend
         .run(&req, &ws_volume, &cache_volume, &mut sink)
         .await?;
 
-    // Advertise artifacts produced by the build, then send the subset the
-    // client asks for. Globs are matched relative to the directory the build
-    // ran in (so `target/**` means that project's target), while the paths
-    // sent back stay workspace-relative for the client to place correctly.
-    let manifest = scan_artifacts(&workspace, &req.cwd, artifact_globs)?;
-    let entries: Vec<_> = manifest.values().cloned().collect();
+    // Anything the build created or modified (content hash differs from before)
+    // is an artifact. The client already has the unchanged files from the sync.
+    let after = scan::scan_raw(&workspace)?;
+    let entries: Vec<_> = after
+        .values()
+        .filter(|e| before.get(&e.path).map(|b| b.hash != e.hash).unwrap_or(true))
+        .cloned()
+        .collect();
     out.control(stream, &Message::ArtifactManifest { entries }).await?;
 
     if let Some(need) = incoming_need.recv().await {
@@ -83,34 +86,6 @@ pub async fn run(
 
     out.control(stream, &Message::BuildFinished { exit_code }).await?;
     Ok(())
-}
-
-/// Scans for artifacts produced by a build. `cwd` is the build's directory
-/// relative to the workspace root; globs are matched against paths relative to
-/// `cwd` (the natural frame for `target/**`), but the returned manifest keys
-/// remain workspace-relative so the client mirrors them to the right place.
-fn scan_artifacts(workspace: &Path, cwd: &str, globs: &[String]) -> Result<scan::Manifest> {
-    let mut builder = GlobSetBuilder::new();
-    for g in globs {
-        builder.add(Glob::new(g).with_context(|| format!("bad artifact glob {g}"))?);
-    }
-    let set = builder.build()?;
-
-    let cwd = cwd.trim_matches('/');
-    let prefix = if cwd.is_empty() {
-        String::new()
-    } else {
-        format!("{cwd}/")
-    };
-
-    let all = scan::scan_raw(workspace)?;
-    Ok(all
-        .into_iter()
-        .filter(|(path, _)| match path.strip_prefix(&prefix) {
-            Some(rel) => set.is_match(rel),
-            None => false,
-        })
-        .collect())
 }
 
 async fn send_artifact(

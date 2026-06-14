@@ -32,7 +32,6 @@ pub enum Message {
         stream: u32,
         workspace: String,
         request: BuildRequest,
-        artifact_globs: Vec<String>,
         linux_image: String,
         wine_image: String,
     },

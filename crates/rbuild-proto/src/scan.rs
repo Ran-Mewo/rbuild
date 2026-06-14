@@ -1,10 +1,11 @@
 //! Filesystem scanning: turning a directory tree into a content-addressed
 //! manifest both sides can diff.
 //!
-//! The client scans with ignore rules applied (`.gitignore` + `.rbuildignore`)
-//! so build outputs and VCS metadata never sync. The daemon scans its mirror
-//! without ignore rules — it must see exactly what it stored so deletions are
-//! detected. Both produce the same [`ManifestEntry`] shape keyed by relative,
+//! Both sides sync *everything* — we deliberately do NOT honor `.gitignore`,
+//! because a build often needs files git ignores (`.env`, secrets, generated
+//! config, vendored blobs). The only excludes are rbuild's own metadata, the
+//! `.git` directory itself, and an explicit `.rbuildignore` the user controls.
+//! Both produce the same [`ManifestEntry`] shape keyed by relative,
 //! forward-slashed path.
 
 use std::collections::BTreeMap;
@@ -14,7 +15,8 @@ use std::path::Path;
 use crate::hash::Hash;
 use crate::proto::ManifestEntry;
 
-/// `.rbuild` is rbuild's own metadata and must never be synced.
+/// rbuild's own metadata and the VCS dir are never synced. `.git` is excluded
+/// because it's huge, machine-local, and meaningless on the build host.
 const ALWAYS_IGNORE: &[&str] = &[".rbuild", ".git"];
 
 /// A manifest as a path→entry map for cheap diffing. Paths use `/` on every
@@ -38,16 +40,17 @@ fn rel_path(root: &Path, path: &Path) -> Option<String> {
     Some(rel.to_string_lossy().replace('\\', "/"))
 }
 
-/// Scans `root` applying gitignore-style rules. Used by the client.
+/// Scans `root` honoring only `.rbuildignore` (the user's explicit opt-out) and
+/// rbuild/VCS metadata — NOT `.gitignore`. Used by the client.
 pub fn scan_with_ignores(root: &Path) -> io::Result<Manifest> {
     let mut manifest = Manifest::new();
     let walker = ignore::WalkBuilder::new(root)
-        .standard_filters(true)
-        // Apply .gitignore even when the project isn't a git checkout — rbuild
-        // projects often aren't, and build outputs must still be excluded.
+        // Disable every built-in filter (gitignore, hidden-file skipping, etc.)
+        // so we sync everything by default…
+        .standard_filters(false)
         .require_git(false)
+        // …except an explicit, rbuild-specific ignore file the user can add.
         .add_custom_ignore_filename(".rbuildignore")
-        .hidden(false)
         .build();
 
     for entry in walker {

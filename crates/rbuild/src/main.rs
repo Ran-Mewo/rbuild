@@ -39,22 +39,21 @@ enum Cmd {
         /// SSH destination, e.g. `build-host` or `user@1.2.3.4`.
         host: String,
     },
-    /// Register a code root (e.g. ~/Code). Everything under it builds remotely.
+    /// Register a code directory. Everything under it builds remotely.
     Add {
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Shared workspace name. Defaults to the folder's name, so same-named
-        /// folders on different machines share and merge (e.g. ~/Code and
-        /// D:/Code). Override to keep two same-named folders separate, or to set
-        /// a custom shared name.
+        /// Shared workspace name. Defaults to the folder's name, so folders of
+        /// the same name on different machines share and merge. Override to keep
+        /// two same-named folders separate, or to set a custom shared name.
         #[arg(long = "as")]
         name: Option<String>,
     },
     /// List registered code roots.
     Roots,
-    /// Pull a remote workspace into a local directory and register it.
-    /// e.g. `rbuild download shared ~/Code` recreates a workspace shared from
-    /// another machine.
+    /// Pull a remote workspace into a local directory and register it, e.g.
+    /// `rbuild download shared <dir>` recreates a workspace shared from another
+    /// machine.
     Download {
         /// The shared workspace name to pull.
         name: String,
@@ -84,6 +83,8 @@ enum Cmd {
     },
     /// Verify connectivity: launch the remote daemon and handshake.
     Connect,
+    /// Update rbuild to the latest release by re-running the install script.
+    Update,
     /// Install the shell hook that activates interception inside code roots.
     InitShell {
         /// bash, zsh, fish, powershell, or cmd.
@@ -139,6 +140,7 @@ async fn main() -> Result<()> {
         Cmd::Linux { argv } => exit_with(cmd_build(argv, Target::Linux).await?),
         Cmd::Sync { path } => cmd_sync(path).await,
         Cmd::Connect => cmd_connect().await,
+        Cmd::Update => cmd_update(),
         Cmd::InitShell { shell } => cmd_init_shell(shell),
         Cmd::Uninstall { keep_remote, wipe_remote } => {
             cmd_uninstall(keep_remote, wipe_remote).await
@@ -166,7 +168,7 @@ fn cmd_init(host: String) -> Result<()> {
     cfg.remote.host = host;
     cfg.save()?;
     println!("Wrote global config to {}", GlobalConfig::path()?.display());
-    println!("Next: `rbuild add ~/Code` then `rbuild init-shell <shell>`.");
+    println!("Next: `rbuild add <dir>` then `rbuild init-shell <shell>`.");
     Ok(())
 }
 
@@ -206,7 +208,7 @@ fn cmd_add(path: PathBuf, name: Option<String>) -> Result<()> {
 fn cmd_roots() -> Result<()> {
     let cfg = GlobalConfig::load().context("no global config — run `rbuild init <host>` first")?;
     if cfg.roots.is_empty() {
-        println!("No code roots registered. Add one with `rbuild add ~/Code`.");
+        println!("No code roots registered. Add one with `rbuild add <dir>`.");
     } else {
         for r in &cfg.roots {
             println!("{}  (workspace '{}')", r.path.display(), r.name);
@@ -217,6 +219,31 @@ fn cmd_roots() -> Result<()> {
 
 async fn cmd_download(name: String, dir: PathBuf) -> Result<()> {
     download::run(name, dir).await
+}
+
+/// Updates rbuild in place by re-running the official install script, which
+/// downloads the latest release and overwrites the current install.
+fn cmd_update() -> Result<()> {
+    const REPO: &str = "Ran-Mewo/rbuild";
+    println!("Updating rbuild to the latest release…");
+    let status = if cfg!(windows) {
+        let ps = format!(
+            "irm https://raw.githubusercontent.com/{REPO}/main/install.ps1 | iex"
+        );
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &ps])
+            .status()
+    } else {
+        let sh = format!(
+            "curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | sh"
+        );
+        std::process::Command::new("sh").args(["-c", &sh]).status()
+    };
+    let status = status.context("running the install script")?;
+    if !status.success() {
+        anyhow::bail!("update failed");
+    }
+    Ok(())
 }
 
 async fn cmd_connect() -> Result<()> {

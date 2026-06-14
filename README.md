@@ -32,17 +32,17 @@ which). Nothing else gets installed on the remote: everything lives in Docker.
 
 ```sh
 rbuild init my-build-host      # your SSH host
-rbuild add ~/Code              # everything under here builds remotely
+rbuild add /path/to/code       # everything under here builds remotely
 rbuild init-shell bash         # one-time shell hook (bash|zsh|fish|powershell|cmd)
 exec $SHELL                    # reload
 
-cd ~/Code/my-project
-cargo build                    # builds on the remote, artifact lands locally
+cd /path/to/code/some-project
+cargo build                    # builds on the remote, output lands locally
 ```
 
 On first build rbuild pushes its daemon and builds the toolchain image on the
 remote automatically. Your edits live-sync in the background, so the remote is
-always current.
+always current. Whatever a build generates is synced back to you.
 
 A Linux client builds for Linux, a Windows client builds for Windows (via Wine —
 no VM needed). Force the other way with `rbuild win <cmd>` or
@@ -65,8 +65,8 @@ no VM needed). Force the other way with `rbuild win <cmd>` or
 ## Sharing across machines
 
 A tracked directory's workspace name defaults to its folder name, so two
-machines that both `rbuild add ~/Code` (or `D:/Code`) share and merge the same
-workspace automatically. Differently-named folders stay separate; use
+machines that both `rbuild add` a folder of the same name share and merge the
+same workspace automatically. Differently-named folders stay separate; use
 `--as <name>` to override.
 
 Sync is two-way: concurrent changes from different machines merge in both
@@ -80,8 +80,8 @@ One file at `~/.config/rbuild/config.toml` (`%APPDATA%\rbuild` on Windows):
 
 ```toml
 [[roots]]
-path = "/home/you/Code"
-name = "Code"            # workspace name; share by matching it on another machine
+path = "/path/to/code"
+name = "code"            # workspace name; share by matching it on another machine
 
 [remote]
 host = "my-build-host"
@@ -89,10 +89,12 @@ host = "my-build-host"
 
 [build]
 commands = ["cargo", "cmake", "make", "gradle", "mvn", "pip", "npm", "go", "msbuild"]
-artifacts = ["target/**"]   # what gets synced back after a build
 ```
 
-Files ignored by `.gitignore` / `.rbuildignore` aren't synced.
+Everything in a tracked directory is synced (including files git ignores, like
+`.env` — your build may need them) and everything a build generates is synced
+back automatically. To exclude paths from syncing, list them in a
+`.rbuildignore` file (gitignore syntax) at the directory root.
 
 ## How it works
 

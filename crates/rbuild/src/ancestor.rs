@@ -46,6 +46,32 @@ pub fn save(workspace_id: &str, manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
+/// Folds a build's outputs into the ancestor snapshot. Each produced path is
+/// recorded with the remote's content hash, so the next live-sync sees it as
+/// already agreed (the remote made it) instead of a local addition to push
+/// back. This is what prevents build artifacts from ping-ponging — without
+/// relying on ignore rules. Paths the build deleted (present in the snapshot,
+/// absent from `produced` *and* gone locally) are left alone; the normal sync
+/// diff handles genuine local deletions.
+pub fn record_build_outputs(
+    workspace_id: &str,
+    produced: &BTreeMap<String, rbuild_proto::Hash>,
+) {
+    if produced.is_empty() {
+        return;
+    }
+    let mut snap = load(workspace_id);
+    for (path, hash) in produced {
+        // len/mode are not load-bearing for the merge (it compares by hash), so
+        // a placeholder mode is fine; len is informational.
+        snap.insert(
+            path.clone(),
+            ManifestEntry { path: path.clone(), hash: *hash, len: 0, mode: 0o644 },
+        );
+    }
+    let _ = save(workspace_id, &snap);
+}
+
 /// Builds the post-merge ancestor: the set of files both sides will agree on
 /// once the plan is applied. Starts from the local manifest, applies local
 /// deletes and pulled entries (taken from remote), and drops conflict entries

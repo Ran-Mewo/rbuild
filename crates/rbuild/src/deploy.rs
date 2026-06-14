@@ -188,3 +188,18 @@ pub async fn wipe_remote(remote: &RemoteConfig) -> Result<()> {
     );
     run_remote_script(remote, &script).await
 }
+
+/// Stops every running daemon container. After re-pushing a newer daemon binary
+/// we kill the old daemons so their next reconnect launches a fresh container
+/// running the new binary — this is what actually rolls the running daemon
+/// forward, not just the binary in the volume. Build containers are untouched
+/// (only `rbuild.role=daemon` is targeted).
+pub async fn kill_daemons(remote: &RemoteConfig) -> Result<()> {
+    let docker = docker_cmd(remote);
+    let script = format!(
+        "ids=$({docker} ps -q -f label=rbuild.role=daemon); \
+         [ -n \"$ids\" ] && {docker} kill $ids >/dev/null 2>&1; \
+         true"
+    );
+    run_remote_script(remote, &script).await
+}

@@ -74,10 +74,6 @@ pub struct BuildSettings {
     /// Container image for Windows-target builds (Wine).
     #[serde(default = "default_wine_image")]
     pub wine_image: String,
-    /// Globs (relative to the directory a build runs in) to sync back as
-    /// artifacts. Only these are mirrored remote→local.
-    #[serde(default = "default_artifacts")]
-    pub artifacts: Vec<String>,
 }
 
 impl Default for BuildSettings {
@@ -86,7 +82,6 @@ impl Default for BuildSettings {
             commands: default_commands(),
             linux_image: default_linux_image(),
             wine_image: default_wine_image(),
-            artifacts: default_artifacts(),
         }
     }
 }
@@ -104,10 +99,6 @@ fn default_linux_image() -> String {
 
 fn default_wine_image() -> String {
     "rbuild/wine:latest".to_string()
-}
-
-fn default_artifacts() -> Vec<String> {
-    vec!["target/**".to_string()]
 }
 
 /// A build location: which code root, the workspace id it maps to on the
