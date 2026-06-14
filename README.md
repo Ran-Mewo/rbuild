@@ -14,7 +14,7 @@ fall back to your local toolchain so you're never stuck.
 
 ## Install
 
-Linux / macOS:
+Linux:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Ran-Mewo/rbuild/main/install.sh | sh
 ```
